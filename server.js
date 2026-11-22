@@ -6,7 +6,7 @@ app.get('/', F('index.html')); app.get('/style.css', F('style.css')); app.get('/
 app.get('/healthz', (q, s) => s.send('ok'));
 const srv = http.createServer(app), io = new Server(srv);
 const rooms = new Map(); // in-memory only, no database
-const NIGHT = 45, VOTE = 60, REVEAL = 20, RES = 8;
+const NIGHT = 45, REVEAL = 20, RES = 8, HUNT = 30;
 const rnd = n => crypto.randomBytes(n).toString('hex');
 const shuf = a => { for (let i = a.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const newCode = () => { let c; do c = Array.from({ length: 5 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ'[crypto.randomInt(24)]).join(''); while (rooms.has(c)); return c; };
@@ -20,9 +20,10 @@ const targets = (r, p) => {
   if (isM(p)) return al.filter(q => !isM(q)).map(q => q.id);
   if (p.role === 'doctor') return al.map(q => q.id);
   if (p.role === 'detective') return al.filter(q => q.id !== p.id).map(q => q.id);
+  if (p.role === 'spy') return al.filter(q => q.id !== p.id && q.id !== p.lastWatch).map(q => q.id);
   return [];
 };
-const need = r => alive(r).filter(p => isM(p) || ['doctor', 'detective'].includes(p.role));
+const need = r => alive(r).filter(p => isM(p) || ['doctor', 'detective', 'spy'].includes(p.role));
 
 // Each player only ever receives their own personalised view (secrets stay on the server).
 function view(r, p) {
@@ -40,6 +41,8 @@ function view(r, p) {
   if (p.alive && r.phase === 'night') { v.pick = n.pick[p.id]; v.check = n.res[p.id]; v.targets = targets(r, p); }
   if (p.alive && r.phase === 'vote') { v.pick = r.vote.v[p.id]; v.targets = alive(r).filter(q => q.id !== p.id).map(q => q.id); }
   if (p.role === 'doctor' && r.docRes && r.docRes.round === r.round && ['day', 'vote', 'result'].includes(r.phase)) v.docRes = r.docRes.ok;
+  if (p.role === 'spy' && r.spyRes && r.spyRes.round === r.round && ['day', 'vote', 'result'].includes(r.phase)) v.spyRes = r.spyRes;
+  if (r.phase === 'hunter' && p.id === r.hunter) v.targets = alive(r).map(q => q.id);
   return v;
 }
 const push = r => { r.touched = Date.now(); r.players.forEach(p => p.sid && io.to(p.sid).emit('state', view(r, p))); };
@@ -50,10 +53,10 @@ function win(r) {
   return m === 0 ? 'citizens' : m >= a.length - m ? 'mafia' : null;
 }
 function startGame(r) {
-  const s = r.set, n = r.players.length, c = n - s.m - (s.doc ? 1 : 0) - (s.det ? 1 : 0);
-  const roles = shuf([...Array(s.m - (s.god ? 1 : 0)).fill('mafia'), ...(s.god ? ['godfather'] : []), ...(s.doc ? ['doctor'] : []), ...(s.det ? ['detective'] : []), ...Array(c).fill('citizen')]);
-  r.players.forEach((p, i) => { p.role = roles[i]; p.alive = true; p.ready = false; });
-  r.round = 0; r.chat = []; r.docRes = null; r.msg = null; r.res = null; r.win = null;
+  const s = r.set, n = r.players.length, c = n - s.m - (s.doc ? 1 : 0) - (s.det ? 1 : 0) - (s.hun ? 1 : 0) - (s.spy ? 1 : 0);
+  const roles = shuf([...Array(s.m - (s.god ? 1 : 0)).fill('mafia'), ...(s.god ? ['godfather'] : []), ...(s.doc ? ['doctor'] : []), ...(s.det ? ['detective'] : []), ...(s.hun ? ['hunter'] : []), ...(s.spy ? ['spy'] : []), ...Array(c).fill('citizen')]);
+  r.players.forEach((p, i) => { p.role = roles[i]; p.alive = true; p.ready = false; p.lastWatch = null; });
+  r.round = 0; r.chat = []; r.docRes = r.spyRes = r.hunter = null; r.msg = null; r.res = null; r.win = null;
   r.phase = 'reveal'; timer(r, REVEAL, () => night(r)); push(r);
 }
 function night(r) {
@@ -69,12 +72,19 @@ function endNight(r) {
   let dead = null;
   const tg = top.length ? byId(r, shuf(top)[0]) : null;
   r.docRes = doc && save ? { round: r.round, ok: !!tg && tg.id === save } : null; // private to the doctor
+  const spy = alive(r).find(p => p.role === 'spy'), sw = spy && n.pick[spy.id];
+  r.spyRes = sw ? { round: r.round, name: byId(r, sw).name, did: !!n.pick[sw] } : null; // private to the spy
+  if (spy) spy.lastWatch = sw || null;
   if (tg && tg.id !== save) { tg.alive = false; dead = { name: tg.name, role: tg.role }; }
-  r.msg = { dead }; r.night = null;
-  const w = win(r); w ? finish(r, w) : day(r);
+  r.msg = { dead, dead2: null }; r.night = null;
+  if (dead && dead.role === 'hunter') return hunterPhase(r, tg);
+  afterNight(r);
 }
+const afterNight = r => { const w = win(r); w ? finish(r, w) : day(r); };
+function hunterPhase(r, h) { r.phase = 'hunter'; r.hunter = h.id; timer(r, HUNT, () => afterHunter(r)); push(r); }
+function afterHunter(r) { clearTimeout(r.tm); r.hunter = null; afterNight(r); }
 function day(r) { r.phase = 'day'; timer(r, r.set.time, () => voting(r)); push(r); }
-function voting(r) { r.phase = 'vote'; r.vote = { v: {} }; timer(r, VOTE, () => tally(r)); push(r); }
+function voting(r) { r.phase = 'vote'; r.vote = { v: {} }; timer(r, r.set.vtime, () => tally(r)); push(r); }
 function tally(r) {
   clearTimeout(r.tm);
   const cnt = {}; Object.values(r.vote.v).forEach(t => cnt[t] = (cnt[t] || 0) + 1);
@@ -99,7 +109,7 @@ io.on('connection', s => {
 
   s.on('create', (d, ack) => {
     const name = clean(d && d.name, 14); if (!name) return ack({ err: 'اكتب اسمك' });
-    const r = { code: newCode(), players: [], phase: 'lobby', round: 0, chat: [], set: { m: 0, doc: true, det: true, god: false, time: 180 }, touched: Date.now() };
+    const r = { code: newCode(), players: [], phase: 'lobby', round: 0, chat: [], set: { m: 0, doc: true, det: true, god: false, hun: false, spy: false, time: 180, vtime: 60 }, touched: Date.now() };
     const p = mkPlayer(r, name); r.host = p.id; rooms.set(r.code, r);
     ack({ ok: 1, code: r.code, tok: p.tok }); attach(r, p);
   });
@@ -118,12 +128,13 @@ io.on('connection', s => {
   });
   s.on('start', (d, ack) => {
     const { r, p } = get(); if (!p || r.host !== p.id || r.phase !== 'lobby') return;
-    const n = r.players.length, m = +d.m || Math.max(1, n / 3 | 0), doc = !!d.doc, det = !!d.det, god = !!d.god;
-    const time = [60, 120, 180, 300, 600].includes(+d.time) ? +d.time : 180, c = n - m - doc - det;
-    if (n < 5) return ack({ err: 'أقل عدد 5 لاعبين' });
-    if (c < 1 || m * 2 >= n) return ack({ err: 'عدد المافيا كبير، قلّله' });
+    const n = r.players.length, m = +d.m || Math.max(1, n / 3 | 0), doc = !!d.doc, det = !!d.det, god = !!d.god, hun = !!d.hun, spy = !!d.spy;
+    const time = [60, 120, 180, 300, 600].includes(+d.time) ? +d.time : 180, vtime = [30, 60, 90, 120, 180].includes(+d.vtime) ? +d.vtime : 60, c = n - m - doc - det - hun - spy;
+    if (n < 4) return ack({ err: 'أقل عدد 4 لاعبين' });
+    if (m * 2 >= n) return ack({ err: 'عدد المافيا كبير بالنسبة لعدد اللاعبين، قلّله' });
+    if (c < 1) return ack({ err: 'الشخصيات الخاصة أكثر من اللازم لهذا العدد، عطّل بعضها' });
     if (god && m < 2) return ack({ err: 'العرّاب يحتاج فريق مافيا من 2 على الأقل' });
-    r.set = { m, doc, det, god, time }; startGame(r); ack({ ok: 1 });
+    r.set = { m, doc, det, god, hun, spy, time, vtime }; startGame(r); ack({ ok: 1 });
   });
   s.on('ready', () => {
     const { r, p } = get(); if (!p || r.phase !== 'reveal') return;
@@ -140,6 +151,11 @@ io.on('connection', s => {
     const { r, p } = get(); if (!p || r.phase !== 'vote' || !p.alive || r.vote.v[p.id]) return;
     const q = byId(r, t); if (!q || !q.alive || q === p) return;
     r.vote.v[p.id] = t; alive(r).every(x => r.vote.v[x.id]) ? tally(r) : push(r);
+  });
+  s.on('shoot', t => {
+    const { r, p } = get(); if (!p || r.phase !== 'hunter' || r.hunter !== p.id) return;
+    const q = byId(r, t); if (!q || !q.alive) return;
+    q.alive = false; r.msg.dead2 = { name: q.name, role: q.role }; afterHunter(r);
   });
   s.on('skip', () => { const { r, p } = get(); if (p && r.host === p.id && r.phase === 'day') voting(r); });
   s.on('chat', t => {
