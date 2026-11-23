@@ -30,7 +30,7 @@ function view(r, p) {
   const end = r.phase === 'end', n = r.night || { pick: {}, res: {} };
   const v = {
     code: r.code, phase: r.phase, round: r.round, left: Math.max(0, (r.deadline || 0) - Date.now()),
-    host: p.id === r.host, set: r.set, msg: r.msg, res: r.res, win: r.win,
+    host: p.id === r.host, set: r.set, msg: r.msg, res: r.phase === 'result' ? r.res : null, win: r.win,
     me: { id: p.id, name: p.name, role: p.role, alive: p.alive },
     players: r.players.map(q => ({
       id: q.id, name: q.name, alive: q.alive, on: q.on, host: q.id === r.host, ready: !!q.ready,
@@ -86,7 +86,7 @@ const afterNight = r => { const w = win(r); w ? finish(r, w) : day(r); };
 function hunterPhase(r, h) { r.phase = 'hunter'; r.hunter = h.id; timer(r, HUNT, () => afterHunter(r)); push(r); }
 function afterHunter(r) { if (r.phase !== 'hunter') return; clearTimeout(r.tm); r.hunter = null; afterNight(r); }
 function day(r) { r.phase = 'day'; timer(r, r.set.time, () => voting(r)); push(r); }
-function voting(r) { if (r.phase !== 'day') return; r.phase = 'vote'; r.vote = { v: {}, n: alive(r).length }; timer(r, r.set.vtime, () => tally(r)); push(r); }
+function voting(r) { if (r.phase !== 'day') return; r.phase = 'vote'; r.vote = { v: {}, n: alive(r).length, ids: alive(r).map(q => q.id) }; timer(r, r.set.vtime, () => tally(r)); push(r); }
 function tally(r) {
   if (r.phase !== 'vote') return;
   clearTimeout(r.tm);
@@ -95,7 +95,8 @@ function tally(r) {
   const e = Object.entries(cnt).sort((a, b) => b[1] - a[1]), tie = e.length > 1 && e[0][1] === e[1][1];
   let out = null;
   if (e.length && !tie) { const t = byId(r, e[0][0]); t.alive = false; out = { name: t.name, role: t.role }; }
-  r.res = { counts: e.map(([id, c]) => ({ name: byId(r, id).name, c, by: by[id] })), skips: r.vote.n - used, out, tie };
+  r.res = { counts: e.map(([id, c]) => ({ name: byId(r, id).name, c, by: by[id] })), skips: r.vote.n - used, out, tie,
+    votes: r.vote.ids.map(i => { const t = r.vote.v[i]; return { voter: byId(r, i).name, to: t && t !== 'skip' ? byId(r, t).name : null }; }) };
   r.phase = 'result'; const w = win(r);
   timer(r, RES, () => { if (r.phase === 'result') w ? finish(r, w) : night(r); }); push(r);
 }

@@ -102,10 +102,13 @@ function vote(v) {
   const al = v.me.alive;
   go(`${tag(v, '🗳️ التصويت')}${!al ? '<h2>💀 لا يحق لك التصويت</h2>' : v.pick ? '<h2>تم تسجيل صوتك ✅</h2><p class="mut">بانتظار البقية…</p>' : '<h2>من تشتبه به؟</h2>' + opts(v, 'vt') + skipB(v, 'vt', 'تخطي التصويت')}${docH(v)}${spyH(v)}${timerH(v)}${plist(v)}${chatBox(v, al)}`);
 }
+const arN = n => n === 1 ? 'صوت واحد' : n === 2 ? 'صوتان' : n <= 10 ? n + ' أصوات' : n + ' صوتاً';
 function result(v) {
   const r = v.res;
-  go(`<div class="tag">نتيجة التصويت</div><div class="card">${r.counts.map(c => `<div class="row sp"><span><b>${esc(c.name)}</b><br><small class="mut">صوّت له: ${c.by.map(esc).join('، ')}</small></span><b class="gold">${c.c} 🗳️</b></div>`).join('') || '<p class="mut">لا أصوات على أي لاعب</p>'}
-  <div class="row sp"><span class="mut">⏭ تخطّوا التصويت</span><b>${r.skips}</b></div></div>
+  go(`<div class="tag">نتيجة التصويت</div>
+  <div class="card"><h3>من صوّت لمن</h3>${r.votes.map(x => `<div class="row sp"><b>${esc(x.voter)}</b><span>${x.to ? '← ' + esc(x.to) : '<span class="mut">← تخطى التصويت</span>'}</span></div>`).join('')}</div>
+  <div class="card"><h3>مجموع الأصوات</h3>${r.counts.map(c => `<div class="row sp"><b>${esc(c.name)}</b><b class="gold">${arN(c.c)}</b></div>`).join('')}
+  <div class="row sp"><span class="mut">تخطي التصويت</span><b>${r.skips ? arN(r.skips) : 'لا أحد'}</b></div></div>
   <h1>${r.out ? `خرج ${esc(r.out.name)} 🚪` : r.tie ? 'تعادل! لا أحد يخرج اليوم ⚖️' : 'لا أحد يخرج اليوم'}</h1>${r.out ? `<p class="mut">كان دوره: ${ROLES[r.out.role].i} ${ROLES[r.out.role].n}</p>` : ''}
   <p class="mut">…الليل يقترب 🌙</p>`);
 }
