@@ -56,44 +56,48 @@ function startGame(r) {
   const s = r.set, n = r.players.length, c = n - s.m - (s.doc ? 1 : 0) - (s.det ? 1 : 0) - (s.hun ? 1 : 0) - (s.spy ? 1 : 0);
   const roles = shuf([...Array(s.m - (s.god ? 1 : 0)).fill('mafia'), ...(s.god ? ['godfather'] : []), ...(s.doc ? ['doctor'] : []), ...(s.det ? ['detective'] : []), ...(s.hun ? ['hunter'] : []), ...(s.spy ? ['spy'] : []), ...Array(c).fill('citizen')]);
   r.players.forEach((p, i) => { p.role = roles[i]; p.alive = true; p.ready = false; p.lastWatch = null; });
-  r.round = 0; r.chat = []; r.docRes = r.spyRes = r.hunter = null; r.msg = null; r.res = null; r.win = null;
+  r.round = 0; r.chat = []; r.docRes = r.spyRes = r.hunter = r.night = r.vote = null; r.msg = null; clearTimeout(r.tm); r.res = null; r.win = null;
   r.phase = 'reveal'; timer(r, REVEAL, () => night(r)); push(r);
 }
 function night(r) {
+  if (!['reveal', 'result'].includes(r.phase)) return;
   r.phase = 'night'; r.round++; r.night = { pick: {}, res: {} };
   timer(r, NIGHT, () => endNight(r)); push(r);
 }
 function endNight(r) {
+  if (r.phase !== 'night') return;
   clearTimeout(r.tm);
   const n = r.night, cnt = {};
-  alive(r).filter(p => isM(p) && n.pick[p.id]).forEach(p => { const t = n.pick[p.id]; cnt[t] = (cnt[t] || 0) + 1; });
+  alive(r).filter(p => isM(p) && n.pick[p.id] && n.pick[p.id] !== 'skip').forEach(p => { const t = n.pick[p.id]; cnt[t] = (cnt[t] || 0) + 1; });
   const mx = Math.max(0, ...Object.values(cnt)), top = Object.keys(cnt).filter(k => cnt[k] === mx);
-  const doc = alive(r).find(p => p.role === 'doctor'), save = doc && n.pick[doc.id];
+  const doc = alive(r).find(p => p.role === 'doctor'), save = doc && n.pick[doc.id] !== 'skip' ? n.pick[doc.id] : null;
   let dead = null;
   const tg = top.length ? byId(r, shuf(top)[0]) : null;
   r.docRes = doc && save ? { round: r.round, ok: !!tg && tg.id === save } : null; // private to the doctor
-  const spy = alive(r).find(p => p.role === 'spy'), sw = spy && n.pick[spy.id];
-  r.spyRes = sw ? { round: r.round, name: byId(r, sw).name, did: !!n.pick[sw] } : null; // private to the spy
+  const spy = alive(r).find(p => p.role === 'spy'), sw = spy && n.pick[spy.id] !== 'skip' ? n.pick[spy.id] : null;
+  r.spyRes = sw ? { round: r.round, name: byId(r, sw).name, did: !!n.pick[sw] && n.pick[sw] !== 'skip' } : null; // private to the spy
   if (spy) spy.lastWatch = sw || null;
   if (tg && tg.id !== save) { tg.alive = false; dead = { name: tg.name, role: tg.role }; }
-  r.msg = { dead, dead2: null }; r.night = null;
+  r.msg = { dead, dead2: null, saved: !!(tg && save && tg.id === save) }; r.night = null;
   if (dead && dead.role === 'hunter') return hunterPhase(r, tg);
   afterNight(r);
 }
 const afterNight = r => { const w = win(r); w ? finish(r, w) : day(r); };
 function hunterPhase(r, h) { r.phase = 'hunter'; r.hunter = h.id; timer(r, HUNT, () => afterHunter(r)); push(r); }
-function afterHunter(r) { clearTimeout(r.tm); r.hunter = null; afterNight(r); }
+function afterHunter(r) { if (r.phase !== 'hunter') return; clearTimeout(r.tm); r.hunter = null; afterNight(r); }
 function day(r) { r.phase = 'day'; timer(r, r.set.time, () => voting(r)); push(r); }
-function voting(r) { r.phase = 'vote'; r.vote = { v: {} }; timer(r, r.set.vtime, () => tally(r)); push(r); }
+function voting(r) { if (r.phase !== 'day') return; r.phase = 'vote'; r.vote = { v: {}, n: alive(r).length }; timer(r, r.set.vtime, () => tally(r)); push(r); }
 function tally(r) {
+  if (r.phase !== 'vote') return;
   clearTimeout(r.tm);
-  const cnt = {}; Object.values(r.vote.v).forEach(t => cnt[t] = (cnt[t] || 0) + 1);
+  const cnt = {}, by = {}; let used = 0;
+  Object.entries(r.vote.v).forEach(([voter, t]) => { if (t === 'skip') return; cnt[t] = (cnt[t] || 0) + 1; (by[t] = by[t] || []).push(byId(r, voter).name); used++; });
   const e = Object.entries(cnt).sort((a, b) => b[1] - a[1]), tie = e.length > 1 && e[0][1] === e[1][1];
   let out = null;
   if (e.length && !tie) { const t = byId(r, e[0][0]); t.alive = false; out = { name: t.name, role: t.role }; }
-  r.res = { counts: e.map(([id, c]) => ({ name: byId(r, id).name, c })), out, tie };
+  r.res = { counts: e.map(([id, c]) => ({ name: byId(r, id).name, c, by: by[id] })), skips: r.vote.n - used, out, tie };
   r.phase = 'result'; const w = win(r);
-  timer(r, RES, () => w ? finish(r, w) : night(r)); push(r);
+  timer(r, RES, () => { if (r.phase === 'result') w ? finish(r, w) : night(r); }); push(r);
 }
 function finish(r, w) { clearTimeout(r.tm); r.phase = 'end'; r.win = w; r.deadline = 0; push(r); }
 function drop(r, p) {
@@ -141,15 +145,17 @@ io.on('connection', s => {
     p.ready = true; r.players.every(q => q.ready) ? night(r) : push(r);
   });
   s.on('act', t => {
-    const { r, p } = get(); if (!p || r.phase !== 'night' || !p.alive || !targets(r, p).includes(t)) return;
+    const { r, p } = get(); if (!p || r.phase !== 'night' || !p.alive) return;
+    if (t !== 'skip' && !targets(r, p).includes(t)) return;
+    if (t === 'skip' && !need(r).includes(p)) return;
     if (p.role === 'detective' && r.night.pick[p.id]) return;
     r.night.pick[p.id] = t;
-    if (p.role === 'detective') r.night.res[p.id] = { id: t, m: byId(r, t).role === 'mafia' };
+    if (p.role === 'detective' && t !== 'skip') r.night.res[p.id] = { id: t, m: byId(r, t).role === 'mafia' };
     need(r).every(q => r.night.pick[q.id]) ? endNight(r) : push(r);
   });
   s.on('vote', t => {
     const { r, p } = get(); if (!p || r.phase !== 'vote' || !p.alive || r.vote.v[p.id]) return;
-    const q = byId(r, t); if (!q || !q.alive || q === p) return;
+    if (t !== 'skip') { const q = byId(r, t); if (!q || !q.alive || q === p) return; }
     r.vote.v[p.id] = t; alive(r).every(x => r.vote.v[x.id]) ? tally(r) : push(r);
   });
   s.on('shoot', t => {
@@ -164,10 +170,15 @@ io.on('connection', s => {
     const ch = r.phase === 'night' ? 'mafia' : 'all'; if (ch === 'mafia' && !isM(p)) return;
     r.chat.push({ ch, name: p.name, text: t }); if (r.chat.length > 100) r.chat.shift(); push(r);
   });
-  s.on('again', () => {
+  s.on('again', () => { // host: brand-new game right now, same players and settings
     const { r, p } = get(); if (!p || r.host !== p.id || r.phase !== 'end') return;
-    r.players.forEach(q => { q.role = null; q.alive = true; q.ready = false; });
-    r.phase = 'lobby'; r.chat = []; r.msg = r.res = r.win = null; push(r);
+    startGame(r);
+  });
+  s.on('toLobby', () => {
+    const { r, p } = get(); if (!p || r.host !== p.id || r.phase !== 'end') return;
+    r.players.forEach(q => { q.role = null; q.alive = true; q.ready = false; q.lastWatch = null; });
+    r.phase = 'lobby'; r.round = 0; r.deadline = 0; r.chat = [];
+    r.msg = r.res = r.win = r.night = r.vote = r.docRes = r.spyRes = r.hunter = null; push(r);
   });
   s.on('disconnect', () => {
     const { r, p } = get(); if (!p || p.sid !== s.id) return;

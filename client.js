@@ -18,7 +18,7 @@ const go = h => {
   const n = $('#ci'); if (n) { n.value = val; if (foc) n.focus(); }
 };
 const mf = r => r === 'mafia' || r === 'godfather';
-const docH = v => typeof v.docRes === 'boolean' ? `<div class="card"><b>${v.docRes ? 'نجحت عملية الإنقاذ 🩺' : 'لم تنجح عملية الإنقاذ هذه الليلة'}</b><p class="mut">نتيجة سرية: لا يراها غيرك</p></div>` : '';
+const docH = v => typeof v.docRes === 'boolean' ? `<div class="card"><b>${v.docRes ? 'نجحت الحماية! لقد أنقذت لاعباً 🩺' : 'لم تنجح الحماية هذه الليلة'}</b><p class="mut">نتيجة سرية: لا يراها غيرك</p></div>` : '';
 const spyH = v => v.spyRes ? `<div class="card"><b>👁️ ${esc(v.spyRes.name)}: ${v.spyRes.did ? 'قام بنشاط ليلي 👣' : 'لم يقم بأي نشاط ليلي'}</b><p class="mut">نتيجة سرية: لا يراها غيرك</p></div>` : '';
 const nm = (v, id) => v.players.find(p => p.id === id).name;
 const tag = (v, t) => `<div class="tag">${t}</div> <span class="chip">${ROLES[v.me.role].i} ${ROLES[v.me.role].n}</span>`;
@@ -81,36 +81,41 @@ function reveal(v) {
   <p class="mut">${rc}/${v.players.length} جاهز</p>`);
 }
 const TT = { mafia: '🔪 اختر ضحيتك', godfather: '🎩 اختر ضحيتك', spy: '👁️ من تراقب الليلة؟', doctor: '⚕️ من تحمي الليلة؟', detective: '🕵️ من تفحص؟' };
+const SK = { mafia: 'تخطي القتل', godfather: 'تخطي القتل', doctor: 'تخطي الحماية', detective: 'تخطي التحقيق', spy: 'تخطي المراقبة' };
+const skipB = (v, fn, label) => `<button class="btn ${v.pick === 'skip' ? '' : 'ghost'}" onclick="${fn}('skip')">⏭ ${label}${v.pick === 'skip' ? ' ✓' : ''}</button>`;
 function night(v) {
   const m = v.me, al = m.alive; let body;
   if (!al) body = '<h2>💀 خرجت من اللعبة، تابع بصمت</h2>';
   else if (v.check) body = `<div class="role ${v.check.m ? 'mafia' : ''}"><div class="ri">${v.check.m ? '🔪' : '✅'}</div><h1>${esc(nm(v, v.check.id))}</h1><p>${v.check.m ? 'من المافيا!' : 'ليس من المافيا'}</p></div>`;
-  else if (v.targets && v.targets.length) body = `<h2>${TT[m.role]}</h2>${opts(v, 'act')}`;
+  else if (v.pick === 'skip' && m.role === 'detective') body = '<h2>تخطيت التحقيق هذه الليلة ⏭</h2>';
+  else if (v.targets && v.targets.length) body = `<h2>${TT[m.role]}</h2>${opts(v, 'act')}${skipB(v, 'act', SK[m.role])}`;
   else body = '<div class="logo">😴</div><h2>المدينة نائمة…</h2><p class="mut">انتظر حتى الصباح</p>';
   go(`${tag(v, '🌙 الليلة ' + v.round)}${body}${timerH(v)}${plist(v)}${al && mf(m.role) ? chatBox(v, 1) : ''}`);
 }
 function day(v) {
   const d = v.msg && v.msg.dead;
-  go(`${tag(v, '☀️ النهار ' + v.round)}<h1>${d ? `قُتل ${esc(d.name)} هذه الليلة 💀` : 'مرّت الليلة بسلام، لم يُقتل أحد 🌅'}</h1>
+  go(`${tag(v, '☀️ النهار ' + v.round)}<h1>${d ? `قُتل ${esc(d.name)} هذه الليلة 💀` : (v.msg && v.msg.saved ? 'لم يمت أحد هذه الليلة، تمت حماية أحد اللاعبين بنجاح 🛡️' : 'مرّت الليلة بسلام، لم يُقتل أحد 🌅')}</h1>
   ${d ? `<p class="mut">كان دوره: ${ROLES[d.role].i} ${ROLES[d.role].n}</p>` : ''}${v.msg && v.msg.dead2 ? `<p class="mut">🏹 وأخذ الصياد معه ${esc(v.msg.dead2.name)} (${ROLES[v.msg.dead2.role].i} ${ROLES[v.msg.dead2.role].n})</p>` : ''}${docH(v)}${spyH(v)}${plist(v)}${timerH(v)}
   ${v.host ? '<button class="btn ghost" onclick="skip()">⏭ انتقال للتصويت</button>' : ''}${chatBox(v, v.me.alive)}`);
 }
 function vote(v) {
   const al = v.me.alive;
-  go(`${tag(v, '🗳️ التصويت')}${!al ? '<h2>💀 لا يحق لك التصويت</h2>' : v.pick ? '<h2>تم تسجيل صوتك ✅</h2><p class="mut">بانتظار البقية…</p>' : '<h2>من تشتبه به؟</h2>' + opts(v, 'vt')}${docH(v)}${spyH(v)}${timerH(v)}${plist(v)}${chatBox(v, al)}`);
+  go(`${tag(v, '🗳️ التصويت')}${!al ? '<h2>💀 لا يحق لك التصويت</h2>' : v.pick ? '<h2>تم تسجيل صوتك ✅</h2><p class="mut">بانتظار البقية…</p>' : '<h2>من تشتبه به؟</h2>' + opts(v, 'vt') + skipB(v, 'vt', 'تخطي التصويت')}${docH(v)}${spyH(v)}${timerH(v)}${plist(v)}${chatBox(v, al)}`);
 }
 function result(v) {
   const r = v.res;
-  go(`<div class="tag">نتيجة التصويت</div><div class="card">${r.counts.map(c => `<div class="row sp"><span>${esc(c.name)}</span><b class="gold">${c.c} 🗳️</b></div>`).join('') || '<p class="mut">لا أصوات</p>'}</div>
-  <h1>${r.out ? `خرج ${esc(r.out.name)} 🚪` : 'تعادل! لا أحد يخرج اليوم ⚖️'}</h1>${r.out ? `<p class="mut">كان دوره: ${ROLES[r.out.role].i} ${ROLES[r.out.role].n}</p>` : ''}
+  go(`<div class="tag">نتيجة التصويت</div><div class="card">${r.counts.map(c => `<div class="row sp"><span><b>${esc(c.name)}</b><br><small class="mut">صوّت له: ${c.by.map(esc).join('، ')}</small></span><b class="gold">${c.c} 🗳️</b></div>`).join('') || '<p class="mut">لا أصوات على أي لاعب</p>'}
+  <div class="row sp"><span class="mut">⏭ تخطّوا التصويت</span><b>${r.skips}</b></div></div>
+  <h1>${r.out ? `خرج ${esc(r.out.name)} 🚪` : r.tie ? 'تعادل! لا أحد يخرج اليوم ⚖️' : 'لا أحد يخرج اليوم'}</h1>${r.out ? `<p class="mut">كان دوره: ${ROLES[r.out.role].i} ${ROLES[r.out.role].n}</p>` : ''}
   <p class="mut">…الليل يقترب 🌙</p>`);
 }
 function fin(v) {
-  const mf = v.win === 'mafia';
-  go(`<div class="logo">${mf ? '🔪' : '🏙️'}</div><h1>${mf ? 'فازت المافيا!' : 'فاز المواطنون!'}</h1>
-  <div class="card">${v.players.map(p => `<div class="row sp" style="${p.alive ? '' : 'opacity:.55'}"><span>${p.alive ? '🟢' : '💀'} ${esc(p.name)}</span><span class="${mf(p.role) ? '' : 'gold'}">${ROLES[p.role].i} ${ROLES[p.role].n}</span></div>`).join('')}</div>
-  ${v.host ? '<button class="btn" onclick="socket.emit(\'again\')">🔁 إعادة اللعب بنفس المجموعة</button>' : '<p class="mut">بانتظار المضيف لإعادة اللعب…</p>'}`);
+  Object.assign(cfg, v.set); const mw = v.win === 'mafia';
+  go(`<div class="logo">${mw ? '🔪' : '🏙️'}</div><h1>${mw ? 'فازت المافيا!' : 'فاز المواطنون!'}</h1>
+  <div class="card">${v.players.map(p => `<div class="row sp" style="${p.alive ? '' : 'opacity:.6'}"><span>${esc(p.name)}<br><small class="mut">${p.alive ? '🟢 حي' : '💀 خرج من اللعبة'}</small></span><span class="${mf(p.role) ? '' : 'gold'}">${ROLES[p.role].i} ${ROLES[p.role].n}</span></div>`).join('')}</div>
+  ${v.host ? `<button class="btn" onclick="socket.emit('again')">🔁 إعادة اللعبة بنفس المجموعة</button><button class="btn ghost" onclick="socket.emit('toLobby')">⚙️ العودة إلى إعدادات اللاعبين</button>` : '<p class="mut">بانتظار المضيف…</p>'}`);
 }
+
 const shoot = id => socket.emit('shoot', id);
 function hunter(v) {
   go(`${tag(v, '🏹 الصياد')}<h1>سقط الصياد 💀</h1>${v.targets ? '<h2>اختر من يخرج معك</h2>' + opts(v, 'shoot') : '<p class="mut">الصياد يختار هدفه الأخير…</p>'}${timerH(v)}${plist(v)}`);
